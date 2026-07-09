@@ -45,16 +45,14 @@ def extract(req: InvoiceRequest):
     invoice_no = None
 
     patterns = [
-        r"Invoice\s*No\.?\s*:\s*(\S+)",
-        r"Invoice\s*Number\s*:\s*(\S+)",
-        r"Invoice\s*#\s*(\S+)",
-        r"Inv\s*No\.?\s*:\s*(\S+)",
+        r'(?im)^\s*invoice\s*(?:no\.?|number|#|id)?\s*[:\-]?\s*([A-Za-z0-9][A-Za-z0-9\-\/]*)',
+        r'(?im)^\s*inv\s*(?:no\.?|#)?\s*[:\-]?\s*([A-Za-z0-9][A-Za-z0-9\-\/]*)',
+        r'(?im)^\s*(?:document|bill)\s*(?:no\.?|number)?\s*[:\-]?\s*([A-Za-z0-9][A-Za-z0-9\-\/]*)',
     ]
-    
     for p in patterns:
-        m = re.search(p, txt, re.I)
+        m = re.search(p, txt)
         if m:
-            invoice_no = m.group(1)
+            invoice_no = m.group(1).strip()
             break
 
     vendor = find([
