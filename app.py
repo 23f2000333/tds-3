@@ -71,9 +71,35 @@ def extract(req: InvoiceRequest):
         except:
             pass
 
-    amount = money(find([
-        r"Subtotal.*?([0-9,]+\.[0-9]{2})"
-    ], txt))
+    def parse_amount(value):
+        if value is None:
+            return None
+    
+        value = value.replace(",", "")
+        value = re.sub(r"[₹$€£]|Rs\.?|INR|USD|EUR|GBP", "", value, flags=re.I)
+        value = value.strip()
+    
+        try:
+            return float(value)
+        except:
+            return None
+    
+    
+    amount = None
+    
+    amount_patterns = [
+        r"Subtotal\s*[:\-]?\s*([₹$€£A-Za-z.\s0-9,]+)",
+        r"Sub\s*Total\s*[:\-]?\s*([₹$€£A-Za-z.\s0-9,]+)",
+        r"Net\s*Amount\s*[:\-]?\s*([₹$€£A-Za-z.\s0-9,]+)",
+        r"Taxable\s*Value\s*[:\-]?\s*([₹$€£A-Za-z.\s0-9,]+)",
+        r"Amount\s*[:\-]?\s*([₹$€£A-Za-z.\s0-9,]+)",
+    ]
+    
+    for p in amount_patterns:
+        m = re.search(p, txt, re.I)
+        if m:
+            amount = parse_amount(m.group(1))
+            break
 
     tax = money(find([
         r"(?:GST|VAT|Tax).*?([0-9,]+\.[0-9]{2})"
