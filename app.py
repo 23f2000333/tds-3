@@ -42,9 +42,20 @@ def extract(req: InvoiceRequest):
 
     txt = req.invoice_text
 
-    invoice_no = find([
-        r"Invoice\s*(?:No|#|Number)?\s*[:#]?\s*([A-Za-z0-9\-\/]+)"
-    ], txt)
+    invoice_no = None
+
+    patterns = [
+        r"Invoice\s*No\.?\s*:\s*(\S+)",
+        r"Invoice\s*Number\s*:\s*(\S+)",
+        r"Invoice\s*#\s*(\S+)",
+        r"Inv\s*No\.?\s*:\s*(\S+)",
+    ]
+    
+    for p in patterns:
+        m = re.search(p, txt, re.I)
+        if m:
+            invoice_no = m.group(1)
+            break
 
     vendor = find([
         r"Vendor\s*:\s*(.+)",
