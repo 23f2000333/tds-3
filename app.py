@@ -101,9 +101,22 @@ def extract(req: InvoiceRequest):
             amount = parse_amount(m.group(1))
             break
 
-    tax = money(find([
-        r"(?:GST|VAT|Tax).*?([0-9,]+\.[0-9]{2})"
-    ], txt))
+    tax = None
+
+    tax_patterns = [
+        r"GST.*?([0-9,]+\.\d+)",
+        r"VAT.*?([0-9,]+\.\d+)",
+        r"CGST.*?([0-9,]+\.\d+)",
+        r"SGST.*?([0-9,]+\.\d+)",
+        r"IGST.*?([0-9,]+\.\d+)",
+        r"Tax.*?([0-9,]+\.\d+)"
+    ]
+    
+    for p in tax_patterns:
+        m = re.search(p, txt, re.I)
+        if m:
+            tax = parse_amount(m.group(1))
+            break
 
     currency = find([
         r"Currency\s*:\s*([A-Z]{3})",
