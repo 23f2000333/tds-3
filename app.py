@@ -1,8 +1,12 @@
+import os
+import json
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from dateutil import parser
-import re
+from google import genai
+
+client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 
 app = FastAPI()
 
@@ -19,119 +23,98 @@ class InvoiceRequest(BaseModel):
     invoice_text: str
 
 
-def find(patterns, text):
-    for p in patterns:
-        m = re.search(p, text, re.I | re.M)
-        if m:
-            return m.group(1).strip()
-    return None
-
-
-def money(x):
-    if not x:
-        return None
-    x = x.replace(",", "").strip()
-    try:
-        return float(x)
-    except:
-        return None
-
-
 @app.post("/extract")
 def extract(req: InvoiceRequest):
 
-    txt = req.invoice_text
+    prompt = f"""
+You are an invoice information extraction engine.
 
-    invoice_no = None
+Extract these fields from the invoice.
 
-    patterns = [
-        r'(?im)^\s*invoice\s*(?:no\.?|number|#|id)?\s*[:\-]?\s*([A-Za-z0-9][A-Za-z0-9\-\/]*)',
-        r'(?im)^\s*inv\s*(?:no\.?|#)?\s*[:\-]?\s*([A-Za-z0-9][A-Za-z0-9\-\/]*)',
-        r'(?im)^\s*(?:document|bill)\s*(?:no\.?|number)?\s*[:\-]?\s*([A-Za-z0-9][A-Za-z0-9\-\/]*)',
-    ]
-    for p in patterns:
-        m = re.search(p, txt)
-        if m:
-            invoice_no = m.group(1).strip()
-            break
+Return ONLY valid JSON.
 
-    vendor = find([
-        r"Vendor\s*:\s*(.+)",
-        r"Seller\s*:\s*(.+)"
-    ], txt)
+Schema:
 
-    date_str = find([
-        r"Date\s*:\s*(.+)"
-    ], txt)
+{{
+  "invoice_no": string|null,
+  "date": string|null,
+  "vendor": string|null,
+  "amount": number|null,
+  "tax": number|null,
+  "currency": string|null
+}}
 
-    date = None
-    if date_str:
+Rules:
+
+- amount = subtotal BEFORE tax.
+- tax = ONLY the tax amount.
+- date must be YYYY-MM-DD.
+- currency must be ISO code like INR, USD, EUR, GBP.
+- If a field cannot be found, use null.
+- Return JSON only.
+
+Invoice:
+
+{req.invoice_text}
+"""
+
+    response = client.models.generate_content(
+        model="gemini-2.5-flash",
+        contents=prompt,
+    )
+
+    text = response.text.strip()
+
+    # Remove markdown fences if present
+    if text.startswith("```"):
+        lines = text.splitlines()
+        lines = [line for line in lines if not line.startswith("```")]
+        text = "\n".join(lines)
+
+    data = json.loads(text)
+
+    # Normalize date
+    if data.get("date"):
         try:
-            date = parser.parse(date_str).strftime("%Y-%m-%d")
-        except:
-            pass
+            data["date"] = parser.parse(data["date"]).strftime("%Y-%m-%d")
+        except Exception:
+            data["date"] = None
 
-    def parse_amount(value):
+    # Normalize numeric values
+    for field in ("amount", "tax"):
+        value = data.get(field)
         if value is None:
-            return None
-    
-        value = value.replace(",", "")
-        value = re.sub(r"[₹$€£]|Rs\.?|INR|USD|EUR|GBP", "", value, flags=re.I)
-        value = value.strip()
-    
+            continue
         try:
-            return float(value)
-        except:
-            return None
-    
-    
-    amount = None
-    
-    amount_patterns = [
-        r"Subtotal\s*[:\-]?\s*([₹$€£A-Za-z.\s0-9,]+)",
-        r"Sub\s*Total\s*[:\-]?\s*([₹$€£A-Za-z.\s0-9,]+)",
-        r"Net\s*Amount\s*[:\-]?\s*([₹$€£A-Za-z.\s0-9,]+)",
-        r"Taxable\s*Value\s*[:\-]?\s*([₹$€£A-Za-z.\s0-9,]+)",
-        r"Amount\s*[:\-]?\s*([₹$€£A-Za-z.\s0-9,]+)",
-    ]
-    
-    for p in amount_patterns:
-        m = re.search(p, txt, re.I)
-        if m:
-            amount = parse_amount(m.group(1))
-            break
+            if isinstance(value, str):
+                value = (
+                    value.replace(",", "")
+                    .replace("₹", "")
+                    .replace("Rs.", "")
+                    .replace("Rs", "")
+                    .replace("$", "")
+                    .strip()
+                )
+            data[field] = float(value)
+        except Exception:
+            data[field] = None
 
-    tax = None
-
-    tax_patterns = [
-        r"GST.*?([0-9,]+\.\d+)",
-        r"VAT.*?([0-9,]+\.\d+)",
-        r"CGST.*?([0-9,]+\.\d+)",
-        r"SGST.*?([0-9,]+\.\d+)",
-        r"IGST.*?([0-9,]+\.\d+)",
-        r"Tax.*?([0-9,]+\.\d+)"
-    ]
-    
-    for p in tax_patterns:
-        m = re.search(p, txt, re.I)
-        if m:
-            tax = parse_amount(m.group(1))
-            break
-
-    currency = find([
-        r"Currency\s*:\s*([A-Z]{3})",
-        r"\b(INR|USD|EUR|GBP)\b",
-        r"\bRs\.?\b"
-    ], txt)
-
-    if currency == "Rs":
-        currency = "INR"
+    # Normalize currency
+    if isinstance(data.get("currency"), str):
+        c = data["currency"].upper()
+        mapping = {
+            "RS": "INR",
+            "RUPEES": "INR",
+            "RUPEE": "INR",
+            "₹": "INR"
+        }
+        data["currency"] = mapping.get(c, c)
 
     return {
-        "invoice_no": invoice_no,
-        "date": date,
-        "vendor": vendor,
-        "amount": amount,
-        "tax": tax,
-        "currency": currency
+        "invoice_no": data.get("invoice_no"),
+        "date": data.get("date"),
+        "vendor": data.get("vendor"),
+        "amount": data.get("amount"),
+        "tax": data.get("tax"),
+        "currency": data.get("currency"),
     }
