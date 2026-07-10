@@ -1,12 +1,16 @@
 import os
 import json
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from dateutil import parser
-from google import genai
+from openai import OpenAI
 
-client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+client = OpenAI(
+    api_key=os.getenv("AIPIPE_TOKEN"),
+    base_url="https://aipipe.org/openai/v1",
+)
 
 app = FastAPI()
 
@@ -36,12 +40,12 @@ Return ONLY valid JSON.
 Schema:
 
 {{
-  "invoice_no": string|null,
-  "date": string|null,
-  "vendor": string|null,
-  "amount": number|null,
-  "tax": number|null,
-  "currency": string|null
+  "invoice_no": null,
+  "date": null,
+  "vendor": null,
+  "amount": null,
+  "tax": null,
+  "currency": null
 }}
 
 Rules:
@@ -49,27 +53,33 @@ Rules:
 - amount = subtotal BEFORE tax.
 - tax = ONLY the tax amount.
 - date must be YYYY-MM-DD.
-- currency must be ISO code like INR, USD, EUR, GBP.
+- currency must be ISO code like INR, USD, EUR, GBP, JPY.
 - If a field cannot be found, use null.
-- Return JSON only.
+- Return ONLY valid JSON.
+- Do not wrap the JSON in markdown.
 
 Invoice:
 
 {req.invoice_text}
 """
 
-    response = client.models.generate_content(
-        model="gemini-2.5-flash",
-        contents=prompt,
+    response = client.chat.completions.create(
+        model="gpt-4.1-mini",
+        temperature=0,
+        response_format={"type": "json_object"},
+        messages=[
+            {
+                "role": "system",
+                "content": "You extract structured data from invoices.",
+            },
+            {
+                "role": "user",
+                "content": prompt,
+            },
+        ],
     )
 
-    text = response.text.strip()
-
-    # Remove markdown fences if present
-    if text.startswith("```"):
-        lines = text.splitlines()
-        lines = [line for line in lines if not line.startswith("```")]
-        text = "\n".join(lines)
+    text = response.choices[0].message.content.strip()
 
     data = json.loads(text)
 
@@ -83,8 +93,10 @@ Invoice:
     # Normalize numeric values
     for field in ("amount", "tax"):
         value = data.get(field)
+
         if value is None:
             continue
+
         try:
             if isinstance(value, str):
                 value = (
@@ -93,21 +105,34 @@ Invoice:
                     .replace("Rs.", "")
                     .replace("Rs", "")
                     .replace("$", "")
+                    .replace("€", "")
+                    .replace("£", "")
                     .strip()
                 )
+
             data[field] = float(value)
+
         except Exception:
             data[field] = None
 
     # Normalize currency
     if isinstance(data.get("currency"), str):
-        c = data["currency"].upper()
+        c = data["currency"].strip().upper()
+
         mapping = {
             "RS": "INR",
-            "RUPEES": "INR",
             "RUPEE": "INR",
-            "₹": "INR"
+            "RUPEES": "INR",
+            "₹": "INR",
+            "$": "USD",
+            "US$": "USD",
+            "EURO": "EUR",
+            "EUROS": "EUR",
+            "£": "GBP",
+            "POUNDS STERLING": "GBP",
+            "YEN": "JPY",
         }
+
         data["currency"] = mapping.get(c, c)
 
     return {
